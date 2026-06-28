@@ -183,6 +183,8 @@ a:hover { text-decoration: underline; }
 
 html[data-mode="simple"] .tech { display: none; }
 html[data-mode="simple"] .plain { display: block; }
+html[data-mode="technical"] .plain { display: none; }
+html[data-mode="technical"] .tech { display: block; }
 html[data-mode="simple"] .modehint[data-for="simple"] { display: block; }
 html[data-mode="technical"] .modehint[data-for="technical"] { display: block; }
 
