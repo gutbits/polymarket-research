@@ -125,6 +125,70 @@ a:hover { text-decoration: underline; }
 .pill.good { color: var(--good); border-color: #36d39955; }
 .pill.warn { color: var(--warn); border-color: #fbbd2355; }
 
+/* ---------- Reading-mode toggle ---------- */
+.modebar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: 8px 0 4px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(160deg, #16202c, #0f141b);
+  position: sticky;
+  top: 8px;
+  z-index: 30;
+  backdrop-filter: blur(8px);
+}
+.modebar-label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.modeswitch {
+  display: inline-flex;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+.modebtn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .18s, color .18s;
+  white-space: nowrap;
+}
+.modebtn:hover { color: var(--text); }
+.modebtn.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 2px 12px #4fa3ff33;
+}
+.modehint { font-size: 12.5px; color: var(--text-faint); flex: 1 1 220px; min-width: 180px; }
+
+/* Mode visibility — driven by data-mode on <html> (set pre-paint) and toggled by JS */
+.plain { display: none; }
+.modehint[data-for] { display: none; }
+
+html[data-mode="simple"] .tech { display: none; }
+html[data-mode="simple"] .plain { display: block; }
+html[data-mode="simple"] .modehint[data-for="simple"] { display: block; }
+html[data-mode="technical"] .modehint[data-for="technical"] { display: block; }
+
+/* Plain-English blocks get a soft friendly accent */
+.plain > .lead:first-child { margin-top: 0; }
+
 /* ---------- Disclaimer ---------- */
 .callout {
   border: 1px solid var(--border);

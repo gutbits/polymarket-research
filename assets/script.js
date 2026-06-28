@@ -32,6 +32,19 @@
     });
   }
 
+  // reading-mode toggle (Plain English <-> Technical)
+  const modeBtns = Array.from(document.querySelectorAll('.modebtn'));
+  function setMode(mode) {
+    const m = mode === 'technical' ? 'technical' : 'simple';
+    document.documentElement.dataset.mode = m;
+    modeBtns.forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
+    try { localStorage.setItem('readmode', m); } catch (e) {}
+  }
+  modeBtns.forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  let saved = 'simple';
+  try { saved = localStorage.getItem('readmode') || 'simple'; } catch (e) {}
+  setMode(saved);
+
   // back to top
   const back = document.querySelector('.backtop');
   if (back) {

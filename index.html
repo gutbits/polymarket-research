@@ -3,9 +3,11 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Polymarket: Wallets, Keys, API & Withdrawals — Technical Report</title>
-<meta name="description" content="A detailed technical reference on Polymarket's wallet architecture, private keys, CLOB API authentication, deposits/withdrawals, geo-restrictions, fraud controls, and real-world withdrawal failure modes." />
+<title>Polymarket: Wallets, Keys, API & Withdrawals — Plain-English + Technical Report</title>
+<meta name="description" content="A detailed reference on Polymarket's wallet architecture, private keys, CLOB API authentication, deposits/withdrawals, geo-restrictions, fraud controls, and real-world withdrawal failure modes — with a plain-English mode for non-technical readers." />
 <link rel="stylesheet" href="assets/style.css" />
+<!-- set reading mode before paint to avoid a flash -->
+<script>try{if((localStorage.getItem('readmode')||'simple')==='simple'){document.documentElement.dataset.mode='simple';}else{document.documentElement.dataset.mode='technical';}}catch(e){document.documentElement.dataset.mode='simple';}</script>
 </head>
 <body>
 <button class="menu-btn" aria-label="Toggle menu">☰ Contents</button>
@@ -13,10 +15,10 @@
 <div class="shell">
   <!-- Sidebar -->
   <aside class="sidebar">
-    <div class="brand"><span class="dot"></span><strong>Polymarket Tech Report</strong></div>
+    <div class="brand"><span class="dot"></span><strong>Polymarket Report</strong></div>
     <p class="tag">Wallets · Keys · API · Withdrawals</p>
 
-    <h2>Part I — Architecture</h2>
+    <h2>Part I — How it works</h2>
     <ul class="toc">
       <li><a href="#overview">Overview &amp; scope</a></li>
       <li><a href="#wallets">1. Account &amp; wallet model</a></li>
@@ -26,7 +28,7 @@
       <li><a href="#fraud">5. Fraud prevention &amp; holds</a></li>
     </ul>
 
-    <h2>Part II — Field Report</h2>
+    <h2>Part II — What goes wrong</h2>
     <ul class="toc">
       <li><a href="#pusd">6. The pUSD migration (Apr 2026)</a></li>
       <li><a href="#limits">7. Limits, fees &amp; timing</a></li>
@@ -47,7 +49,7 @@
   <main class="content">
     <div class="hero">
       <h1>Polymarket: Wallets, Keys, API Access &amp; Withdrawal Controls</h1>
-      <p class="sub">A consolidated technical reference on how Polymarket stores funds, authenticates trading, and gates deposits/withdrawals — plus the real-world failure modes people actually hit.</p>
+      <p class="sub">How Polymarket stores your money, logs you in, and controls deposits &amp; withdrawals — plus the real-world problems people actually run into. Available in plain English or full technical detail.</p>
       <div class="meta">
         <span class="pill">Polygon · chainId 137</span>
         <span class="pill good">Non-custodial core</span>
@@ -56,235 +58,425 @@
       </div>
     </div>
 
+    <!-- ===================== READING-MODE TOGGLE ===================== -->
+    <div class="modebar" role="group" aria-label="Reading mode">
+      <span class="modebar-label">Reading mode</span>
+      <div class="modeswitch">
+        <button class="modebtn" data-mode="simple" type="button">🙂 Plain English</button>
+        <button class="modebtn" data-mode="technical" type="button">🛠️ Technical</button>
+      </div>
+      <span class="modehint" data-for="simple">Friendly explanations, no jargon — the same facts, just easier to read.</span>
+      <span class="modehint" data-for="technical">Full detail: contracts, API headers, code, and exact policy.</span>
+    </div>
+
     <div class="callout">
-      <strong>Scope &amp; intent.</strong> Everything below is <em>publicly documented</em> architecture and policy, drawn from Polymarket's own docs/help center, security press coverage, and community reports. It explains how the system is built — useful for building bots, integrations, recovering your own funds, and hardening your account. It is <strong>not</strong> a guide to evading geoblocks, KYC, or fraud controls; those exist for sanctions/AML compliance, and circumventing them violates Polymarket's Terms and can get funds frozen.
+      <strong>Scope &amp; intent.</strong> Everything below is <em>publicly documented</em> architecture and policy, drawn from Polymarket's own docs/help center, security press coverage, and community reports. It explains how the system is built — useful for understanding where your money lives, recovering your own funds, and keeping your account safe. It is <strong>not</strong> a guide to evading geoblocks, KYC, or fraud controls; those exist for sanctions/AML compliance, and circumventing them violates Polymarket's Terms and can get funds frozen.
     </div>
 
     <!-- ===================== PART I ===================== -->
     <section id="overview">
       <h2>Overview &amp; scope</h2>
-      <p class="lead">Polymarket runs on <strong>Polygon (chainId 137)</strong> with a deliberately split design: a <strong>non-custodial technical core</strong> (smart-contract wallets, an off-chain/on-chain order book, key-based auth) wrapped in a <strong>gated access layer</strong> (web frontend, geoblocking, app-level account state).</p>
-      <p>The single most important consequence of that split: Polymarket <em>cannot</em> seize the USDC in your on-chain wallet, but it <em>can</em> freeze your access to the UI and to order placement. Restrictions stop you opening positions and using the app; they don't change the fact that your funds ultimately sit in a contract your private key controls.</p>
+
+      <div class="plain">
+        <p class="lead">Polymarket is a website where people bet on the outcome of real-world events (elections, sports, prices). It doesn't hold your cash the way a bank or a casino does. Instead, your money sits in your own crypto wallet on a blockchain called <strong>Polygon</strong>, and the website is really just a control panel for that wallet.</p>
+        <p>That one fact explains almost everything else on this page. There are two separate things going on:</p>
+        <ul>
+          <li><strong>Your money</strong> lives on the blockchain in a wallet that only <em>your secret key</em> can move. Polymarket cannot reach in and take it.</li>
+          <li><strong>Your access</strong> — the website, the app, the ability to place a new bet — <em>is</em> controlled by Polymarket. They can block your country, freeze your account, or ask you to verify your identity.</li>
+        </ul>
+        <p>So when something goes wrong, the key question is always: <em>is this a money problem (on the blockchain) or an access problem (on the website)?</em> Money problems are usually recoverable with your secret key. Access problems are about Polymarket's rules.</p>
+      </div>
+
+      <div class="tech">
+        <p class="lead">Polymarket runs on <strong>Polygon (chainId 137)</strong> with a deliberately split design: a <strong>non-custodial technical core</strong> (smart-contract wallets, an off-chain/on-chain order book, key-based auth) wrapped in a <strong>gated access layer</strong> (web frontend, geoblocking, app-level account state).</p>
+        <p>The single most important consequence of that split: Polymarket <em>cannot</em> seize the USDC in your on-chain wallet, but it <em>can</em> freeze your access to the UI and to order placement. Restrictions stop you opening positions and using the app; they don't change the fact that your funds ultimately sit in a contract your private key controls.</p>
+      </div>
     </section>
 
     <section id="wallets">
       <h2>1. Account &amp; wallet architecture</h2>
-      <p>The core is a <strong>two-layer wallet model</strong>: a <strong>signer (EOA)</strong> that you control, and a <strong>proxy wallet (smart contract)</strong> that actually holds your money.</p>
 
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>Layer</th><th>What it is</th><th>What it holds</th></tr></thead>
-        <tbody>
-          <tr><td><strong>EOA / Signer</strong></td><td>An Externally Owned Account — a normal keypair. Your "master key."</td><td>Nothing, usually. It only <em>authorizes</em>.</td></tr>
-          <tr><td><strong>Proxy Wallet</strong></td><td>A smart contract (1-of-1 multisig) deployed on Polygon, owned/controlled by your EOA.</td><td>All your <strong>USDC (ERC-20)</strong> and all your <strong>positions (ERC-1155 outcome tokens)</strong>.</td></tr>
-        </tbody>
-      </table>
+      <div class="plain">
+        <p>You actually have <strong>two</strong> wallets, and mixing them up is the #1 source of confusion.</p>
+        <ul>
+          <li><strong>The "key" wallet (your signer).</strong> Think of it like the key to a safe. It doesn't hold your money — its only job is to <em>approve</em> things. This is the wallet your secret "private key" belongs to.</li>
+          <li><strong>The "vault" wallet (your proxy).</strong> This is the safe itself — it's where all your dollars and your open bets are actually stored. Your key wallet is the only thing that can open it.</li>
+        </ul>
+        <p>Here's the catch that trips everyone up: when you export your secret key and look it up on a blockchain explorer, it shows <strong>$0</strong> — because the money isn't in the key wallet, it's in the vault wallet. That's normal. The vault address is calculated automatically from your key, so the two are permanently linked.</p>
+        <p>How your key wallet was created depends on how you signed up:</p>
+        <ul>
+          <li><strong>Signed up with email or Google?</strong> A company called <strong>Magic</strong> quietly created a wallet for you in the background. You never saw a seed phrase. Convenient, but it means Magic is part of your security (this matters later — see the 2025 hack in section 11).</li>
+          <li><strong>Connected MetaMask or another crypto wallet?</strong> Then <em>you</em> already control the key, and Polymarket just builds a vault attached to it.</li>
+        </ul>
+        <div class="callout warn">⚠️ Your secret private key is like the master key to everything. Anyone who gets it can drain your account, and there's no "reset password" — if it leaks, the money is gone. Treat it like the keys to a safe full of cash.</div>
       </div>
 
-      <p>When you first interact with Polymarket, a proxy contract is deployed on-chain that is owned by your signer EOA. Your funds sit at the <strong>proxy address</strong>, not the EOA address. This trips people up constantly: the address you export a private key for is <em>not</em> the address holding the balance.</p>
+      <div class="tech">
+        <p>The core is a <strong>two-layer wallet model</strong>: a <strong>signer (EOA)</strong> that you control, and a <strong>proxy wallet (smart contract)</strong> that actually holds your money.</p>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Layer</th><th>What it is</th><th>What it holds</th></tr></thead>
+          <tbody>
+            <tr><td><strong>EOA / Signer</strong></td><td>An Externally Owned Account — a normal keypair. Your "master key."</td><td>Nothing, usually. It only <em>authorizes</em>.</td></tr>
+            <tr><td><strong>Proxy Wallet</strong></td><td>A smart contract (1-of-1 multisig) deployed on Polygon, owned/controlled by your EOA.</td><td>All your <strong>USDC (ERC-20)</strong> and all your <strong>positions (ERC-1155 outcome tokens)</strong>.</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <p>When you first interact with Polymarket, a proxy contract is deployed on-chain that is owned by your signer EOA. Your funds sit at the <strong>proxy address</strong>, not the EOA address. This trips people up constantly: the address you export a private key for is <em>not</em> the address holding the balance.</p>
 
-      <h3>Two flavors of signer, two factories</h3>
-      <ul>
-        <li><strong>Magic Link users</strong> (email / Google login): Magic Labs provisions a non-custodial EOA behind the scenes — no browser extension. Polymarket deploys a <strong>custom proxy contract</strong> for these users via its own factory. This is the <code>POLY_PROXY</code> signature type in the API.</li>
-        <li><strong>MetaMask / browser-wallet users</strong>: the signer is your MetaMask EOA, and Polymarket uses <strong>Gnosis Safe factories</strong>, producing a Gnosis-Safe-style proxy. This is the <code>POLY_GNOSIS_SAFE</code> signature type.</li>
-      </ul>
-      <p>Because both factories are deterministic (CREATE2-style), the proxy address is <strong>derived deterministically</strong> from the signer address — the same EOA always maps to the same proxy. That's how the app and API can compute where your funds are before the contract is even deployed.</p>
+        <h3>Two flavors of signer, two factories</h3>
+        <ul>
+          <li><strong>Magic Link users</strong> (email / Google login): Magic Labs provisions a non-custodial EOA behind the scenes — no browser extension. Polymarket deploys a <strong>custom proxy contract</strong> for these users via its own factory. This is the <code>POLY_PROXY</code> signature type in the API.</li>
+          <li><strong>MetaMask / browser-wallet users</strong>: the signer is your MetaMask EOA, and Polymarket uses <strong>Gnosis Safe factories</strong>, producing a Gnosis-Safe-style proxy. This is the <code>POLY_GNOSIS_SAFE</code> signature type.</li>
+        </ul>
+        <p>Because both factories are deterministic (CREATE2-style), the proxy address is <strong>derived deterministically</strong> from the signer address — the same EOA always maps to the same proxy. That's how the app and API can compute where your funds are before the contract is even deployed.</p>
 
-      <h3>Private key management (Magic Link)</h3>
-      <ul>
-        <li>If you signed up with email/Google, <strong>Magic Labs custodies the key material</strong> and you authenticate through Magic's UI.</li>
-        <li>You can export the raw EOA private key via Magic's official reveal flow at <code>reveal.magic.link/polymarket</code>.</li>
-        <li>Developers commonly load it as an env var (e.g. <code>.env.local</code>) so a script can sign orders and derive the proxy wallet programmatically. Polymarket publishes reference repos: <code>magic-proxy-builder-example</code> and <code>magic-safe-builder-example</code>.</li>
-      </ul>
-      <div class="callout warn">⚠️ Exporting that key gives full control of the account to anyone holding it. Treat it like a seed phrase — there is no recovery if it leaks, and it bypasses every UI-level protection.</div>
+        <h3>Private key management (Magic Link)</h3>
+        <ul>
+          <li>If you signed up with email/Google, <strong>Magic Labs custodies the key material</strong> and you authenticate through Magic's UI.</li>
+          <li>You can export the raw EOA private key via Magic's official reveal flow at <code>reveal.magic.link/polymarket</code>.</li>
+          <li>Developers commonly load it as an env var (e.g. <code>.env.local</code>) so a script can sign orders and derive the proxy wallet programmatically. Polymarket publishes reference repos: <code>magic-proxy-builder-example</code> and <code>magic-safe-builder-example</code>.</li>
+        </ul>
+        <div class="callout warn">⚠️ Exporting that key gives full control of the account to anyone holding it. Treat it like a seed phrase — there is no recovery if it leaks, and it bypasses every UI-level protection.</div>
+      </div>
     </section>
 
     <section id="api">
       <h2>2. CLOB API &amp; authentication</h2>
-      <p>Polymarket's order book is a <strong>CLOB (Central Limit Order Book)</strong> — orders are signed off-chain and settled on-chain, so trading stays <strong>non-custodial</strong>. The API at <code>https://clob.polymarket.com</code> uses a <strong>two-tier auth model</strong>.</p>
 
-      <h3>L1 — Private key authentication (EIP-712)</h3>
-      <p>Used to <strong>create/derive API credentials</strong> and to <strong>sign orders</strong>. You sign an EIP-712 typed-data struct with your EOA private key:</p>
-      <pre><code>Domain:  name="ClobAuthDomain", version="1", chainId=137
+      <div class="plain">
+        <p>This section is about how apps and trading bots <em>log in</em> to Polymarket to place bets automatically. If you only use the website, you can skim this — but the security idea is worth knowing.</p>
+        <p>There are two kinds of "keys," and they're very different in how dangerous they are:</p>
+        <ul>
+          <li><strong>Your master key (private key).</strong> This signs and approves everything, including moving money. Powerful and dangerous — guard it.</li>
+          <li><strong>App keys (API keys).</strong> These are limited helper keys a bot uses for everyday tasks like checking balances or cancelling orders. Crucially, <strong>an app key cannot move your money</strong> — even placing a bet still needs your master key to sign it. So if an app key leaks, it's bad, but far less catastrophic than leaking your master key.</li>
+        </ul>
+        <p>That separation is on purpose: the convenient everyday key is deliberately weak, and the only thing that can actually spend your money is the master key you keep offline.</p>
+        <div class="callout">
+          <strong>What about "OAuth"?</strong> Polymarket has no "Login with Polymarket" button for other apps. When people say "OAuth," they just mean the <strong>email / Google sign-in</strong> you use to log into the Magic wallet. It's the same kind of login as "Sign in with Google" anywhere else — it logs you into the wallet, nothing more.
+        </div>
+      </div>
+
+      <div class="tech">
+        <p>Polymarket's order book is a <strong>CLOB (Central Limit Order Book)</strong> — orders are signed off-chain and settled on-chain, so trading stays <strong>non-custodial</strong>. The API at <code>https://clob.polymarket.com</code> uses a <strong>two-tier auth model</strong>.</p>
+
+        <h3>L1 — Private key authentication (EIP-712)</h3>
+        <p>Used to <strong>create/derive API credentials</strong> and to <strong>sign orders</strong>. You sign an EIP-712 typed-data struct with your EOA private key:</p>
+        <pre><code>Domain:  name="ClobAuthDomain", version="1", chainId=137
 ClobAuth {
   address:   &lt;signing address&gt;
   timestamp: &lt;server timestamp&gt;
   nonce:     &lt;nonce, default 0&gt;
   message:   "This message attests that I control the given wallet"
 }</code></pre>
-      <p><strong>L1 headers:</strong> <code>POLY_ADDRESS</code>, <code>POLY_SIGNATURE</code> (the EIP-712 signature), <code>POLY_TIMESTAMP</code>, <code>POLY_NONCE</code> (default <code>0</code>).</p>
+        <p><strong>L1 headers:</strong> <code>POLY_ADDRESS</code>, <code>POLY_SIGNATURE</code> (the EIP-712 signature), <code>POLY_TIMESTAMP</code>, <code>POLY_NONCE</code> (default <code>0</code>).</p>
 
-      <h3>Credential endpoints</h3>
-      <ul>
-        <li><strong>Create:</strong> <code>POST https://clob.polymarket.com/auth/api-key</code></li>
-        <li><strong>Derive</strong> (deterministic re-fetch): <code>GET https://clob.polymarket.com/derive-api-key</code></li>
-      </ul>
-      <p>Both require L1 headers and return three values: <code>apiKey</code>, <code>secret</code>, <code>passphrase</code>.</p>
+        <h3>Credential endpoints</h3>
+        <ul>
+          <li><strong>Create:</strong> <code>POST https://clob.polymarket.com/auth/api-key</code></li>
+          <li><strong>Derive</strong> (deterministic re-fetch): <code>GET https://clob.polymarket.com/derive-api-key</code></li>
+        </ul>
+        <p>Both require L1 headers and return three values: <code>apiKey</code>, <code>secret</code>, <code>passphrase</code>.</p>
 
-      <h3>L2 — API key authentication (HMAC-SHA256)</h3>
-      <p>Day-to-day operations (cancel/retrieve orders, check balances/allowances, post pre-signed orders) use L2. Here <code>POLY_SIGNATURE</code> is an <strong>HMAC-SHA256</strong> of the request keyed by your API <code>secret</code>.</p>
-      <p><strong>L2 headers (5):</strong> <code>POLY_ADDRESS</code>, <code>POLY_SIGNATURE</code> (HMAC), <code>POLY_TIMESTAMP</code>, <code>POLY_API_KEY</code>, <code>POLY_PASSPHRASE</code>.</p>
-      <div class="callout">
-        <strong>Key nuance.</strong> L2 credentials let you <em>manage</em> orders, but <strong>creating an order still requires an L1 signature on the order payload itself.</strong> The API key never gets unilateral spend authority — it can't move funds, only manage the order lifecycle. A leaked API key is far less catastrophic than a leaked private key. This is the deliberate security boundary.
+        <h3>L2 — API key authentication (HMAC-SHA256)</h3>
+        <p>Day-to-day operations (cancel/retrieve orders, check balances/allowances, post pre-signed orders) use L2. Here <code>POLY_SIGNATURE</code> is an <strong>HMAC-SHA256</strong> of the request keyed by your API <code>secret</code>.</p>
+        <p><strong>L2 headers (5):</strong> <code>POLY_ADDRESS</code>, <code>POLY_SIGNATURE</code> (HMAC), <code>POLY_TIMESTAMP</code>, <code>POLY_API_KEY</code>, <code>POLY_PASSPHRASE</code>.</p>
+        <div class="callout">
+          <strong>Key nuance.</strong> L2 credentials let you <em>manage</em> orders, but <strong>creating an order still requires an L1 signature on the order payload itself.</strong> The API key never gets unilateral spend authority — it can't move funds, only manage the order lifecycle. A leaked API key is far less catastrophic than a leaked private key. This is the deliberate security boundary.
+        </div>
+
+        <h3>"OAuth" on Polymarket</h3>
+        <p>There is no classic OAuth2 third-party authorization flow for trading. What people loosely call "OAuth" is the <strong>Magic Link social login</strong> (email/Google) — that's OAuth/OIDC <em>into Magic</em>, which then provisions the EOA. App-to-API authorization is the L1→L2 key-derivation scheme above, <strong>not</strong> OAuth scopes/tokens. SDKs: <code>py-clob-client</code> (Python), <code>rs-clob-client</code> (Rust), plus community wrappers.</p>
       </div>
-
-      <h3>"OAuth" on Polymarket</h3>
-      <p>There is no classic OAuth2 third-party authorization flow for trading. What people loosely call "OAuth" is the <strong>Magic Link social login</strong> (email/Google) — that's OAuth/OIDC <em>into Magic</em>, which then provisions the EOA. App-to-API authorization is the L1→L2 key-derivation scheme above, <strong>not</strong> OAuth scopes/tokens. SDKs: <code>py-clob-client</code> (Python), <code>rs-clob-client</code> (Rust), plus community wrappers.</p>
     </section>
 
     <section id="deposits">
       <h2>3. Deposits &amp; withdrawals</h2>
-      <ul>
-        <li><strong>Deposits:</strong> USDC (USDC.e / native USDC on Polygon) sent to your <strong>proxy wallet</strong> address. The app also offers cross-chain / onramp bridges that ultimately land USDC in the proxy.</li>
-        <li><strong>Withdrawals:</strong> there is <strong>no custodial "withdraw" API</strong> — a withdrawal is an <strong>on-chain transfer</strong> of USDC out of your proxy wallet, authorized by your signer. Because it's your contract, you (with the EOA key) can move funds directly on-chain even outside the UI.</li>
-        <li><strong>Positions can't be force-withdrawn mid-market.</strong> Outcome tokens (ERC-1155) only convert back to USDC when (a) you sell them on the order book, or (b) the market resolves and you redeem. In <strong>close-only</strong> jurisdictions or after a restriction, the documented behavior is: hold existing positions until resolution, redeem, then withdraw — withdrawals of resolved USDC are then unrestricted.</li>
-      </ul>
+
+      <div class="plain">
+        <p>Money on Polymarket is held as <strong>USDC</strong> — a "stablecoin," a crypto coin always worth about $1. Adding and removing money works like this:</p>
+        <ul>
+          <li><strong>Depositing</strong> means sending USDC into your vault wallet (the site helps you do this, including from other crypto networks).</li>
+          <li><strong>Withdrawing</strong> means sending that USDC back out to a wallet or exchange you control. There's no "cash out to my bank" button — you get crypto, and then you'd sell it for cash on an exchange yourself.</li>
+          <li>Because the vault is <em>yours</em>, you can technically move the money out directly on the blockchain even if the website is down — as long as you have your secret key.</li>
+        </ul>
+        <div class="callout">
+          <strong>The big gotcha:</strong> money that's tied up in an <em>open bet</em> can't be withdrawn. A bet only turns back into spendable dollars when you either <strong>sell</strong> it to someone else or the event <strong>finishes and you collect your winnings</strong>. So "I can't withdraw" very often just means "your money is still in a live bet."
+        </div>
+      </div>
+
+      <div class="tech">
+        <ul>
+          <li><strong>Deposits:</strong> USDC (USDC.e / native USDC on Polygon) sent to your <strong>proxy wallet</strong> address. The app also offers cross-chain / onramp bridges that ultimately land USDC in the proxy.</li>
+          <li><strong>Withdrawals:</strong> there is <strong>no custodial "withdraw" API</strong> — a withdrawal is an <strong>on-chain transfer</strong> of USDC out of your proxy wallet, authorized by your signer. Because it's your contract, you (with the EOA key) can move funds directly on-chain even outside the UI.</li>
+          <li><strong>Positions can't be force-withdrawn mid-market.</strong> Outcome tokens (ERC-1155) only convert back to USDC when (a) you sell them on the order book, or (b) the market resolves and you redeem. In <strong>close-only</strong> jurisdictions or after a restriction, the documented behavior is: hold existing positions until resolution, redeem, then withdraw — withdrawals of resolved USDC are then unrestricted.</li>
+        </ul>
+      </div>
     </section>
 
     <section id="geo">
       <h2>4. Geographic restrictions</h2>
-      <p>Order placement (and in some places deposits) is geoblocked to comply with sanctions, AML, and KYC regimes.</p>
-      <p><strong>Fully blocked (~33 jurisdictions):</strong> United States, United Kingdom, France, Germany, Italy, Belgium, Poland, Australia, Brazil, Japan, Singapore, Taiwan, Thailand — plus sanctioned states: Russia, Belarus, Iran, Iraq, Cuba, Syria, North Korea, Lebanon, Libya, Myanmar, Venezuela, Sudan, South Sudan, Somalia, Yemen, Zimbabwe, Central African Republic, Congo, Burundi, Ethiopia, Nicaragua, US Minor Outlying Islands.</p>
-      <p><strong>Close-only</strong> (manage/close existing positions, no new ones): <strong>Singapore, Poland, Thailand, Taiwan.</strong></p>
-      <p><strong>Regional carve-outs:</strong> Ontario (no deposit/trade); Crimea, Donetsk, Luhansk in Ukraine; Japan front-end UI restricted.</p>
-      <div class="callout">The landscape is shifting in 2026 — there's a separate <strong>regulated US Polymarket</strong> path that <em>does</em> require full KYC (government ID, SSN for tax reporting, proof of residency) to trade legally, distinct from the international platform.</div>
+
+      <div class="plain">
+        <p>Polymarket isn't allowed to operate everywhere, so it blocks a lot of countries to stay on the right side of gambling and sanctions laws. In a blocked country you typically can't place new bets (and sometimes can't even deposit).</p>
+        <p>There are two flavors of restriction:</p>
+        <ul>
+          <li><strong>Fully blocked</strong> — about 33 countries, including the <strong>US, UK, France, Germany, Italy, Australia, Japan, Singapore, Brazil</strong>, plus heavily sanctioned countries (Russia, Iran, North Korea, Syria, and more).</li>
+          <li><strong>"Close-only"</strong> — in a few places (<strong>Singapore, Poland, Thailand, Taiwan</strong>) you can't open new bets, but you can still close out and cash out the ones you already have.</li>
+        </ul>
+        <div class="callout">
+          One important update: in 2026 there's a separate <strong>official US version</strong> of Polymarket that you <em>can</em> use legally — but it requires full identity verification (government ID, Social Security number for taxes, proof of address). That's different from the global site.
+        </div>
+      </div>
+
+      <div class="tech">
+        <p>Order placement (and in some places deposits) is geoblocked to comply with sanctions, AML, and KYC regimes.</p>
+        <p><strong>Fully blocked (~33 jurisdictions):</strong> United States, United Kingdom, France, Germany, Italy, Belgium, Poland, Australia, Brazil, Japan, Singapore, Taiwan, Thailand — plus sanctioned states: Russia, Belarus, Iran, Iraq, Cuba, Syria, North Korea, Lebanon, Libya, Myanmar, Venezuela, Sudan, South Sudan, Somalia, Yemen, Zimbabwe, Central African Republic, Congo, Burundi, Ethiopia, Nicaragua, US Minor Outlying Islands.</p>
+        <p><strong>Close-only</strong> (manage/close existing positions, no new ones): <strong>Singapore, Poland, Thailand, Taiwan.</strong></p>
+        <p><strong>Regional carve-outs:</strong> Ontario (no deposit/trade); Crimea, Donetsk, Luhansk in Ukraine; Japan front-end UI restricted.</p>
+        <div class="callout">The landscape is shifting in 2026 — there's a separate <strong>regulated US Polymarket</strong> path that <em>does</em> require full KYC (government ID, SSN for tax reporting, proof of residency) to trade legally, distinct from the international platform.</div>
+      </div>
     </section>
 
     <section id="fraud">
       <h2>5. Fraud prevention &amp; withdrawal controls</h2>
-      <ul>
-        <li><strong>VPN / location-spoof detection:</strong> Polymarket flags known VPN IP ranges and sudden geographic jumps. Hitting a geoblock via VPN violates the ToS and can trigger <strong>account suspension and an immediate withdrawal freeze</strong> pending investigation.</li>
-        <li><strong>Behavioral AML triggers:</strong> rapid deposit→trade→withdraw cycles, large five-figure churns, or seven-figure positions have been documented tripping internal AML thresholds and forcing identity verification even where KYC isn't otherwise mandatory.</li>
-        <li><strong>On-chain monitoring:</strong> a <strong>Chainalysis-powered</strong> stack watches for insider trading, market manipulation, and illicit-fund flows. Because everything settles on Polygon, the full trade/transfer graph is transparent and analyzable.</li>
-        <li><strong>Stated KYC posture:</strong> Polymarket has said KYC won't be <em>mandatory</em> on the main international market, but reserves it as a risk-triggered measure — while the US-regulated entity requires it up front.</li>
-      </ul>
-      <p>The throughline: the <em>technical</em> layer (CLOB, proxy wallets, L1/L2 keys) is deliberately non-custodial and transparent — Polymarket can't seize your on-chain funds — but the <em>access</em> layer (frontend, geoblock, app-level account state) is where freezes and restrictions bite.</p>
+
+      <div class="plain">
+        <p>Polymarket watches for cheating and money-laundering, and it can pause an account that looks suspicious. The main things it looks for:</p>
+        <ul>
+          <li><strong>VPNs and location tricks.</strong> If you use a VPN to pretend you're in an allowed country, that breaks the rules and can get your account suspended and your withdrawals frozen while they investigate.</li>
+          <li><strong>Suspicious money patterns.</strong> Depositing and withdrawing very fast, or moving very large sums, can trip alarms and force you to verify your identity.</li>
+          <li><strong>Blockchain monitoring.</strong> Because everything is on a public blockchain, they (using a firm called Chainalysis) can trace money and spot insider trading or dirty funds.</li>
+        </ul>
+        <div class="callout">
+          <strong>The reassuring part:</strong> even if Polymarket freezes your <em>account</em>, it still can't take the coins sitting in your vault wallet. A freeze blocks the website and new bets — it doesn't seize your money. With your secret key you can still get those funds out on the blockchain directly.
+        </div>
+      </div>
+
+      <div class="tech">
+        <ul>
+          <li><strong>VPN / location-spoof detection:</strong> Polymarket flags known VPN IP ranges and sudden geographic jumps. Hitting a geoblock via VPN violates the ToS and can trigger <strong>account suspension and an immediate withdrawal freeze</strong> pending investigation.</li>
+          <li><strong>Behavioral AML triggers:</strong> rapid deposit→trade→withdraw cycles, large five-figure churns, or seven-figure positions have been documented tripping internal AML thresholds and forcing identity verification even where KYC isn't otherwise mandatory.</li>
+          <li><strong>On-chain monitoring:</strong> a <strong>Chainalysis-powered</strong> stack watches for insider trading, market manipulation, and illicit-fund flows. Because everything settles on Polygon, the full trade/transfer graph is transparent and analyzable.</li>
+          <li><strong>Stated KYC posture:</strong> Polymarket has said KYC won't be <em>mandatory</em> on the main international market, but reserves it as a risk-triggered measure — while the US-regulated entity requires it up front.</li>
+        </ul>
+        <p>The throughline: the <em>technical</em> layer (CLOB, proxy wallets, L1/L2 keys) is deliberately non-custodial and transparent — Polymarket can't seize your on-chain funds — but the <em>access</em> layer (frontend, geoblock, app-level account state) is where freezes and restrictions bite.</p>
+      </div>
     </section>
 
     <!-- ===================== PART II ===================== -->
     <section id="pusd">
       <h2>6. The pUSD migration (April 2026)</h2>
-      <p>This is the single most important recent change and it touches nearly every withdrawal issue below.</p>
-      <p>On <strong>April 28, 2026</strong>, Polymarket migrated its collateral token from <strong>USDC.e</strong> to <strong>pUSD</strong> ("Polymarket USD") — a Polygon ERC-20 backed 1:1 by USDC, with the backing ratio enforced on-chain. Alongside it they shipped <strong>CTF Exchange V2</strong> (new core contracts, simplified orders, fees calculated <em>at execution</em> instead of <em>at order placement</em>, and elimination of nonce/race-condition order failures).</p>
-      <div class="callout warn"><strong>Why it matters for withdrawals:</strong> when you cash out, your <strong>pUSD is unwrapped/swapped to native USDC through a Uniswap v3 pool</strong> (the "Collateral Offramp"). That swap step is now a dependency — and a failure point (see §8a).</div>
-      <p><strong>Practical fallout:</strong></p>
-      <ul>
-        <li>Users had to approve a <strong>one-time conversion</strong> of their USDC balance to pUSD and authorize the new contracts before trading resumed.</li>
-        <li>Existing limit orders were cancelled during the ~1-hour maintenance window.</li>
-        <li>The 1:1, no-fee conversion means the <em>normal</em> cash-out experience feels unchanged — until the offramp pool runs thin.</li>
-      </ul>
+
+      <div class="plain">
+        <p>In April 2026 Polymarket swapped the dollar-coin it uses internally — from a coin called <strong>USDC.e</strong> to its own version called <strong>pUSD</strong> (still worth $1, just Polymarket's flavor). Most people barely noticed, but it changed one thing that matters a lot when cashing out.</p>
+        <p>Now, when you withdraw, your pUSD has to be <strong>converted back into normal USDC through an automatic exchange pool</strong> before it leaves. Usually that's instant and free — but if that pool runs low (especially on big withdrawals), the conversion can fail or stall. That's behind several of the withdrawal problems in the next section.</p>
+        <p>When the switch happened, everyone had to do a one-time tap to approve the new coin, and any pending bets-in-waiting (limit orders) were cancelled during a short maintenance window.</p>
+      </div>
+
+      <div class="tech">
+        <p>This is the single most important recent change and it touches nearly every withdrawal issue below.</p>
+        <p>On <strong>April 28, 2026</strong>, Polymarket migrated its collateral token from <strong>USDC.e</strong> to <strong>pUSD</strong> ("Polymarket USD") — a Polygon ERC-20 backed 1:1 by USDC, with the backing ratio enforced on-chain. Alongside it they shipped <strong>CTF Exchange V2</strong> (new core contracts, simplified orders, fees calculated <em>at execution</em> instead of <em>at order placement</em>, and elimination of nonce/race-condition order failures).</p>
+        <div class="callout warn"><strong>Why it matters for withdrawals:</strong> when you cash out, your <strong>pUSD is unwrapped/swapped to native USDC through a Uniswap v3 pool</strong> (the "Collateral Offramp"). That swap step is now a dependency — and a failure point (see §8a).</div>
+        <p><strong>Practical fallout:</strong></p>
+        <ul>
+          <li>Users had to approve a <strong>one-time conversion</strong> of their USDC balance to pUSD and authorize the new contracts before trading resumed.</li>
+          <li>Existing limit orders were cancelled during the ~1-hour maintenance window.</li>
+          <li>The 1:1, no-fee conversion means the <em>normal</em> cash-out experience feels unchanged — until the offramp pool runs thin.</li>
+        </ul>
+      </div>
     </section>
 
     <section id="limits">
       <h2>7. Withdrawal limits, fees &amp; timing</h2>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>Item</th><th>Reality</th></tr></thead>
-        <tbody>
-          <tr><td><strong>Minimum withdrawal</strong></td><td>No hard minimum on Polymarket Global. Practically, keep it ≥ <strong>$5</strong> so it clears destination "dust" thresholds.</td></tr>
-          <tr><td><strong>Maximum withdrawal</strong></td><td><strong>No max limit.</strong> But withdrawals over <strong>~$50,000</strong> are explicitly advised to be split into smaller chunks or routed via a third-party bridge to minimize slippage.</td></tr>
-          <tr><td><strong>Withdrawal fee</strong></td><td><strong>None</strong> charged by Polymarket. Gas is paid for you via the <strong>Gas Station Network relayer</strong>. Polygon cost is &lt; $0.01.</td></tr>
-          <tr><td><strong>Speed</strong></td><td>Polygon/Arbitrum/Base: <strong>seconds</strong>. Ethereum mainnet: <strong>minutes</strong>.</td></tr>
-          <tr><td><strong>Withdrawable balance</strong></td><td>Only <strong>"Available to trade"</strong> USDC. Funds in open positions or reserved by resting limit orders are <strong>not</strong> withdrawable.</td></tr>
-          <tr><td><strong>Bank withdrawals</strong></td><td><strong>Not supported.</strong> You withdraw USDC on-chain, then off-ramp via an exchange yourself.</td></tr>
-        </tbody>
-      </table>
+
+      <div class="plain">
+        <p>The short version of how cashing out works:</p>
+        <ul>
+          <li><strong>Minimum:</strong> none really, but keep it above about <strong>$5</strong> so tiny amounts don't get lost in fees.</li>
+          <li><strong>Maximum:</strong> no limit — but for very large amounts (over ~$50,000) it's smarter to split it into several smaller withdrawals so the conversion pool doesn't choke.</li>
+          <li><strong>Fees:</strong> Polymarket charges nothing, and it even covers the blockchain "gas" fee for you. Your real cost is basically zero.</li>
+          <li><strong>Speed:</strong> usually seconds on Polygon; a bit longer on the Ethereum network.</li>
+          <li><strong>What you can take out:</strong> only the money shown as "available to trade." Anything locked in a live bet or a resting order isn't withdrawable yet.</li>
+          <li><strong>No bank transfers:</strong> you get crypto out, then sell it for cash elsewhere.</li>
+        </ul>
+      </div>
+
+      <div class="tech">
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Item</th><th>Reality</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Minimum withdrawal</strong></td><td>No hard minimum on Polymarket Global. Practically, keep it ≥ <strong>$5</strong> so it clears destination "dust" thresholds.</td></tr>
+            <tr><td><strong>Maximum withdrawal</strong></td><td><strong>No max limit.</strong> But withdrawals over <strong>~$50,000</strong> are explicitly advised to be split into smaller chunks or routed via a third-party bridge to minimize slippage.</td></tr>
+            <tr><td><strong>Withdrawal fee</strong></td><td><strong>None</strong> charged by Polymarket. Gas is paid for you via the <strong>Gas Station Network relayer</strong>. Polygon cost is &lt; $0.01.</td></tr>
+            <tr><td><strong>Speed</strong></td><td>Polygon/Arbitrum/Base: <strong>seconds</strong>. Ethereum mainnet: <strong>minutes</strong>.</td></tr>
+            <tr><td><strong>Withdrawable balance</strong></td><td>Only <strong>"Available to trade"</strong> USDC. Funds in open positions or reserved by resting limit orders are <strong>not</strong> withdrawable.</td></tr>
+            <tr><td><strong>Bank withdrawals</strong></td><td><strong>Not supported.</strong> You withdraw USDC on-chain, then off-ramp via an exchange yourself.</td></tr>
+          </tbody>
+        </table>
+        </div>
       </div>
     </section>
 
     <section id="failures">
       <h2>8. The most common withdrawal failures (and fixes)</h2>
 
-      <h4>a) "Insufficient liquidity" / large withdrawal fails — the pUSD→USDC offramp</h4>
-      <p>The Uniswap v3 pool that converts pUSD to native USDC can get <strong>exhausted</strong>, especially for large amounts. Official guidance:</p>
-      <ol>
-        <li><strong>Break it into smaller withdrawals.</strong></li>
-        <li><strong>Wait for the pool to rebalance</strong> and retry.</li>
-        <li><strong>Withdraw pUSD directly</strong> (skips the Uniswap step) — caveat: some exchanges no longer accept pUSD deposits, so you'd need to convert elsewhere.</li>
-      </ol>
+      <div class="plain">
+        <p>If your withdrawal isn't working, it's almost always one of these. In plain terms:</p>
+        <ul>
+          <li><strong>Big withdrawal won't go through ("insufficient liquidity").</strong> The conversion pool ran low. Fix: take it out in smaller amounts, wait a bit and retry, or withdraw the pUSD coin directly.</li>
+          <li><strong>A small test works but the big one is stuck "pending."</strong> Large amounts can take a different route or get a manual security review. Check you picked the right network and give it time.</li>
+          <li><strong>It says "declined" and your balance flashes $0.</strong> Usually just the website out of sync, <em>not</em> lost money. Check your vault address on a blockchain explorer (Polygonscan) to confirm the money's still there, then refresh or log back in.</li>
+          <li><strong>Stuck "in progress" for ages.</strong> The blockchain got congested. For collecting winnings you may need a tiny bit of POL/MATIC coin in your key wallet to push it through.</li>
+          <li><strong>Picked the wrong network.</strong> Choosing Ethereum instead of Polygon makes it slow and expensive — match whatever your receiving exchange expects.</li>
+          <li><strong>Can't withdraw <em>anything</em>.</strong> The most common cause of all: your money is still inside open bets. Sell them or wait for the event to finish, then withdraw.</li>
+          <li><strong>"Withdrawals disabled" / asked to verify ID.</strong> Your account is on a compliance hold — finish any identity check in settings (see section 10).</li>
+        </ul>
+      </div>
 
-      <h4>b) Small test works, large one stalls</h4>
-      <p>Classic report: a small test transfer lands instantly, the big one sits "pending." Causes: the large amount routed over a <strong>different rail</strong>, a <strong>third-party payout processor delay</strong>, or <strong>security manual review for large withdrawals</strong>. Verify destination network support and that the withdrawal moved past the request stage.</p>
+      <div class="tech">
+        <h4>a) "Insufficient liquidity" / large withdrawal fails — the pUSD→USDC offramp</h4>
+        <p>The Uniswap v3 pool that converts pUSD to native USDC can get <strong>exhausted</strong>, especially for large amounts. Official guidance:</p>
+        <ol>
+          <li><strong>Break it into smaller withdrawals.</strong></li>
+          <li><strong>Wait for the pool to rebalance</strong> and retry.</li>
+          <li><strong>Withdraw pUSD directly</strong> (skips the Uniswap step) — caveat: some exchanges no longer accept pUSD deposits, so you'd need to convert elsewhere.</li>
+        </ol>
 
-      <h4>c) "Declined" status + balance momentarily reads $0</h4>
-      <p>Usually a <strong>display-vs-ledger mismatch, not lost funds.</strong> Check your proxy address on <strong>Polygonscan</strong> to confirm the on-chain balance is intact, then hard-refresh / re-login to resync the UI.</p>
+        <h4>b) Small test works, large one stalls</h4>
+        <p>Classic report: a small test transfer lands instantly, the big one sits "pending." Causes: the large amount routed over a <strong>different rail</strong>, a <strong>third-party payout processor delay</strong>, or <strong>security manual review for large withdrawals</strong>. Verify destination network support and that the withdrawal moved past the request stage.</p>
 
-      <h4>d) Stuck in mempool / gas spike</h4>
-      <p>Polymarket submits the tx for you, but if <strong>gas spikes after submission</strong> it can stall or fail. For <em>claims</em> (redeeming winnings), you may need native <strong>POL/MATIC</strong> in the signer to push it through.</p>
+        <h4>c) "Declined" status + balance momentarily reads $0</h4>
+        <p>Usually a <strong>display-vs-ledger mismatch, not lost funds.</strong> Check your proxy address on <strong>Polygonscan</strong> to confirm the on-chain balance is intact, then hard-refresh / re-login to resync the UI.</p>
 
-      <h4>e) Wrong network selected</h4>
-      <p>Picking Ethereum when Polygon is available = higher fees, slower, and a frequent "where's my money" panic. Match the destination network to what the receiving exchange expects.</p>
+        <h4>d) Stuck in mempool / gas spike</h4>
+        <p>Polymarket submits the tx for you, but if <strong>gas spikes after submission</strong> it can stall or fail. For <em>claims</em> (redeeming winnings), you may need native <strong>POL/MATIC</strong> in the signer to push it through.</p>
 
-      <h4>f) Can't withdraw at all — positions not yet realized</h4>
-      <p>The <strong>#1 cause of "stuck" withdrawals</strong>: the money is in <strong>open positions or an unresolved market</strong>. Outcome tokens (ERC-1155) only become withdrawable USDC when you <strong>sell</strong> them or the market <strong>resolves and you redeem</strong>.</p>
+        <h4>e) Wrong network selected</h4>
+        <p>Picking Ethereum when Polygon is available = higher fees, slower, and a frequent "where's my money" panic. Match the destination network to what the receiving exchange expects.</p>
 
-      <h4>g) "Withdrawal disabled" / KYC prompt</h4>
-      <p>Indicates a <strong>compliance/KYC review hold</strong> (see §10). Resolve any pending verification in account settings.</p>
+        <h4>f) Can't withdraw at all — positions not yet realized</h4>
+        <p>The <strong>#1 cause of "stuck" withdrawals</strong>: the money is in <strong>open positions or an unresolved market</strong>. Outcome tokens (ERC-1155) only become withdrawable USDC when you <strong>sell</strong> them or the market <strong>resolves and you redeem</strong>.</p>
+
+        <h4>g) "Withdrawal disabled" / KYC prompt</h4>
+        <p>Indicates a <strong>compliance/KYC review hold</strong> (see §10). Resolve any pending verification in account settings.</p>
+      </div>
     </section>
 
     <section id="recovery">
       <h2>9. Deposits &amp; "missing funds" — the recovery toolchain</h2>
-      <p>When funds don't show, Polymarket has dedicated recovery tooling (not widely advertised):</p>
-      <ul>
-        <li><code>recovery.polymarket.com</code> — sign in with your normal login to discover wallets, scan positions, sell, redeem, and sweep USDC to your EOA. Handles funds <strong>sent to the wrong chain</strong> (Ethereum mainnet, Base, Arbitrum).</li>
-        <li><code>matic-recovery.polymarket.com</code> — for <strong>non-canonical tokens</strong> mistakenly sent on Polygon.</li>
-        <li>Deposits should appear in <strong>~10 min</strong>; if confirmed on Polygonscan but not credited, the usual culprit is sending to a <strong>profile address instead of the deposit-widget address</strong>, or the <strong>wrong token variant</strong>.</li>
-      </ul>
-      <div class="callout bad">
-        <strong>Third-party recovery — extreme caution.</strong> The open-source <code>0-don/polymarket-wallet-recovery</code> tool independently discovers EOA/Proxy/Safe wallets, cancels buys (keeps sells), market-sells positions, redeems resolved markets, and sweeps USDC to your EOA. It needs your <strong>private key</strong> and <strong>MATIC for gas</strong>, warns about <strong>slippage on market-selling</strong>, and advises a <strong>small test first</strong>. Useful if the Polymarket UI is down or you've lost account access — but it requires handing your key to a script, so only run audited code you trust.
+
+      <div class="plain">
+        <p>If you deposited money and it never showed up, don't panic — there are official rescue tools:</p>
+        <ul>
+          <li><strong>recovery.polymarket.com</strong> — log in normally and it finds your wallets, your bets, and any money sent to the wrong network, and helps you pull it back.</li>
+          <li><strong>matic-recovery.polymarket.com</strong> — for odd tokens accidentally sent on the Polygon network.</li>
+          <li>Deposits normally appear in about 10 minutes. If the blockchain shows it arrived but the site doesn't, you probably sent it to the wrong address or used the wrong type of coin.</li>
+        </ul>
+        <div class="callout bad">
+          <strong>Be very careful with "recovery" tools that aren't Polymarket's own.</strong> There's a legitimate open-source one, but any tool that recovers funds needs your <em>secret key</em> — and handing your key to the wrong website or "support agent" is exactly how people get robbed. When in doubt, only use Polymarket's official recovery sites above, and never give your key to someone who messaged you.
+        </div>
+      </div>
+
+      <div class="tech">
+        <p>When funds don't show, Polymarket has dedicated recovery tooling (not widely advertised):</p>
+        <ul>
+          <li><code>recovery.polymarket.com</code> — sign in with your normal login to discover wallets, scan positions, sell, redeem, and sweep USDC to your EOA. Handles funds <strong>sent to the wrong chain</strong> (Ethereum mainnet, Base, Arbitrum).</li>
+          <li><code>matic-recovery.polymarket.com</code> — for <strong>non-canonical tokens</strong> mistakenly sent on Polygon.</li>
+          <li>Deposits should appear in <strong>~10 min</strong>; if confirmed on Polygonscan but not credited, the usual culprit is sending to a <strong>profile address instead of the deposit-widget address</strong>, or the <strong>wrong token variant</strong>.</li>
+        </ul>
+        <div class="callout bad">
+          <strong>Third-party recovery — extreme caution.</strong> The open-source <code>0-don/polymarket-wallet-recovery</code> tool independently discovers EOA/Proxy/Safe wallets, cancels buys (keeps sells), market-sells positions, redeems resolved markets, and sweeps USDC to your EOA. It needs your <strong>private key</strong> and <strong>MATIC for gas</strong>, warns about <strong>slippage on market-selling</strong>, and advises a <strong>small test first</strong>. Useful if the Polymarket UI is down or you've lost account access — but it requires handing your key to a script, so only run audited code you trust.
+        </div>
       </div>
     </section>
 
     <section id="freezes">
       <h2>10. Account freezes, KYC &amp; compliance holds</h2>
-      <ul>
-        <li><strong>What triggers a freeze:</strong> rapid deposit→withdraw cycling, VPN/location anomalies, large or unusual flows. Funds can be frozen pending investigation.</li>
-        <li><strong>KYC review:</strong> government ID + proof of address, typically <strong>24–48 hr</strong>. During review (or if you don't provide docs) access can be limited or fully frozen.</li>
-        <li><strong>Jurisdiction shutdowns happen:</strong> Polymarket fully suspended <strong>French users</strong> in Nov 2024 amid a compliance probe, locking them out of positions. ~<strong>35 countries/regions</strong> are restricted/blocked.</li>
-        <li><strong>The non-custodial nuance:</strong> because your USDC ultimately lives in <em>your</em> proxy contract, an app-level freeze stops you using the <strong>UI</strong>, but the on-chain funds are still controllable with your <strong>private key</strong> (via direct on-chain interaction or the recovery tools). <em>Access</em> can be frozen even when <em>custody</em> cannot be seized.</li>
-      </ul>
+
+      <div class="plain">
+        <p>Sometimes Polymarket pauses an account. Here's what to expect:</p>
+        <ul>
+          <li><strong>What gets you frozen:</strong> rapidly cycling money in and out, VPN/location red flags, or unusually large transfers.</li>
+          <li><strong>Identity checks (KYC):</strong> they may ask for a government ID and proof of address; review usually takes 24–48 hours, and your account can be limited until it's done.</li>
+          <li><strong>Whole countries can be cut off:</strong> e.g. French users were locked out in late 2024 during a regulatory probe. Around 35 countries/regions are restricted.</li>
+        </ul>
+        <div class="callout">
+          <strong>Remember the key distinction:</strong> a freeze stops you from <em>using the website</em>, but your coins are still in your own vault on the blockchain. With your secret key (or the official recovery tools) you can still move them. They can lock the door to the building — they can't empty your safe.
+        </div>
+      </div>
+
+      <div class="tech">
+        <ul>
+          <li><strong>What triggers a freeze:</strong> rapid deposit→withdraw cycling, VPN/location anomalies, large or unusual flows. Funds can be frozen pending investigation.</li>
+          <li><strong>KYC review:</strong> government ID + proof of address, typically <strong>24–48 hr</strong>. During review (or if you don't provide docs) access can be limited or fully frozen.</li>
+          <li><strong>Jurisdiction shutdowns happen:</strong> Polymarket fully suspended <strong>French users</strong> in Nov 2024 amid a compliance probe, locking them out of positions. ~<strong>35 countries/regions</strong> are restricted/blocked.</li>
+          <li><strong>The non-custodial nuance:</strong> because your USDC ultimately lives in <em>your</em> proxy contract, an app-level freeze stops you using the <strong>UI</strong>, but the on-chain funds are still controllable with your <strong>private key</strong> (via direct on-chain interaction or the recovery tools). <em>Access</em> can be frozen even when <em>custody</em> cannot be seized.</li>
+        </ul>
+      </div>
     </section>
 
     <section id="keys">
       <h2>11. Private key reality — including the December 2025 hack</h2>
 
-      <h3>Exporting your key (Magic Link / email users)</h3>
-      <ol>
-        <li>Go to <code>reveal.magic.link/polymarket</code> while logged in.</li>
-        <li>Authenticate with the <strong>exact same email or Google</strong> account.</li>
-        <li>Export and store the key offline.</li>
-        <li>Log out of Magic.</li>
-      </ol>
-      <p><strong>Polymarket will never ask for your key.</strong> Note this exports the <strong>signer EOA</strong> key — your funds sit at the <strong>derived proxy address</strong>, not the EOA (a constant source of "my key shows $0" confusion).</p>
+      <div class="plain">
+        <p><strong>How to get your secret key (email/Google users).</strong> Go to <strong>reveal.magic.link/polymarket</strong>, log in with the exact same email or Google you use for Polymarket, and it shows your private key. Save it somewhere safe and offline, then log out. Remember: this key's own address will read $0 — the money lives in the linked vault wallet, which is normal.</p>
 
-      <h3>The December 2025 supply-chain breach (~$3M)</h3>
-      <p>Between <strong>Dec 22–24, 2025</strong>, users on Reddit/X/Discord reported suspicious logins followed by <strong>drained balances</strong> — no phishing clicked, 2FA enabled, nothing manually approved, funds simply gone. It was traced to a <strong>vulnerability in the Magic Labs email-login (third-party auth) provider</strong> — a supply-chain attack on the authentication layer, <strong>not</strong> Polymarket's smart contracts or settlement. Reported losses ranged from community estimates of <strong>$30k+</strong> up to <strong>~$3M</strong> in press coverage. Polymarket says the flaw was contained/fixed.</p>
-      <div class="callout">
-        <strong>The lesson the community took away:</strong> social login (email/Google) is convenient but means a <strong>third party sits in your security path</strong>. The recommended hardening is to <strong>export your private key and move to self-custody</strong>, or use a <strong>direct wallet connection (MetaMask, etc.)</strong> rather than email login, so no external auth provider can authorize access to your funds.
+        <p><strong>What happened in December 2025.</strong> Over a few days in late December 2025, a number of users suddenly had their accounts drained — no phishing link clicked, two-factor on, nothing approved by them. The money just vanished. The cause wasn't Polymarket's contracts; it was a security flaw in <strong>Magic</strong>, the third-party company that powers the email/Google login. Reported losses ran from tens of thousands up to around <strong>$3 million</strong>. Polymarket says it's been fixed.</p>
+
+        <p>The takeaway the community drew: logging in with email is convenient, but it puts an outside company in charge of your security. The safer setup is to <strong>export your key and self-custody</strong>, or use a real crypto wallet like MetaMask, so no third-party login can be the weak link.</p>
+
+        <div class="callout bad">
+          <strong>Scam survival rules — these never change:</strong>
+          <ul>
+            <li><strong>Never</strong> share your secret key, seed phrase, or recovery phrase with anyone or any "fix my balance" tool. Ever.</li>
+            <li>Real Polymarket support <strong>will never message you first</strong> on X/Twitter, Discord, or Telegram. Anyone who DMs you claiming to be "support" is a scammer.</li>
+            <li>Avoid any third-party site offering to "unlock" or "fix" your balance — that's the trap.</li>
+          </ul>
+        </div>
       </div>
 
-      <h3>Scam patterns to know</h3>
-      <ul>
-        <li><strong>Never</strong> share seed phrase / recovery phrase / private key with anyone or any "balance fix" tool.</li>
-        <li><strong>Real support never DMs you first</strong> on X/Twitter, Discord, or Telegram. Unsolicited "Polymarket support" DMs are scams.</li>
-        <li>Avoid third-party "unlock/fix your balance" services — they're the recovery-tool concept weaponized to steal keys.</li>
-      </ul>
+      <div class="tech">
+        <h3>Exporting your key (Magic Link / email users)</h3>
+        <ol>
+          <li>Go to <code>reveal.magic.link/polymarket</code> while logged in.</li>
+          <li>Authenticate with the <strong>exact same email or Google</strong> account.</li>
+          <li>Export and store the key offline.</li>
+          <li>Log out of Magic.</li>
+        </ol>
+        <p><strong>Polymarket will never ask for your key.</strong> Note this exports the <strong>signer EOA</strong> key — your funds sit at the <strong>derived proxy address</strong>, not the EOA (a constant source of "my key shows $0" confusion).</p>
+
+        <h3>The December 2025 supply-chain breach (~$3M)</h3>
+        <p>Between <strong>Dec 22–24, 2025</strong>, users on Reddit/X/Discord reported suspicious logins followed by <strong>drained balances</strong> — no phishing clicked, 2FA enabled, nothing manually approved, funds simply gone. It was traced to a <strong>vulnerability in the Magic Labs email-login (third-party auth) provider</strong> — a supply-chain attack on the authentication layer, <strong>not</strong> Polymarket's smart contracts or settlement. Reported losses ranged from community estimates of <strong>$30k+</strong> up to <strong>~$3M</strong> in press coverage. Polymarket says the flaw was contained/fixed.</p>
+        <div class="callout">
+          <strong>The lesson the community took away:</strong> social login (email/Google) is convenient but means a <strong>third party sits in your security path</strong>. The recommended hardening is to <strong>export your private key and move to self-custody</strong>, or use a <strong>direct wallet connection (MetaMask, etc.)</strong> rather than email login, so no external auth provider can authorize access to your funds.
+        </div>
+
+        <h3>Scam patterns to know</h3>
+        <ul>
+          <li><strong>Never</strong> share seed phrase / recovery phrase / private key with anyone or any "balance fix" tool.</li>
+          <li><strong>Real support never DMs you first</strong> on X/Twitter, Discord, or Telegram. Unsolicited "Polymarket support" DMs are scams.</li>
+          <li>Avoid third-party "unlock/fix your balance" services — they're the recovery-tool concept weaponized to steal keys.</li>
+        </ul>
+      </div>
     </section>
 
     <section id="triage">
       <h2>12. Quick triage table</h2>
+      <p class="lead">Find your symptom, see the likely cause, and the first thing to try. Useful in both reading modes.</p>
       <div class="table-wrap">
       <table>
         <thead><tr><th>Symptom</th><th>Most likely cause</th><th>First move</th></tr></thead>
         <tbody>
-          <tr><td>Large withdrawal fails</td><td>pUSD→USDC Uniswap pool exhausted</td><td>Split into smaller amounts / withdraw pUSD directly</td></tr>
+          <tr><td>Large withdrawal fails</td><td>pUSD→USDC conversion pool exhausted</td><td>Split into smaller amounts / withdraw pUSD directly</td></tr>
           <tr><td>Test works, big one pending</td><td>Different rail / manual review</td><td>Verify network, wait, check it left request stage</td></tr>
-          <tr><td>"Declined" + $0 shown</td><td>UI/ledger desync</td><td>Check Polygonscan, hard-refresh</td></tr>
-          <tr><td>Can't withdraw any</td><td>Funds in open/unresolved positions</td><td>Sell or wait for resolution + redeem</td></tr>
-          <tr><td>"Withdrawal disabled" / KYC</td><td>Compliance hold</td><td>Complete KYC in settings</td></tr>
+          <tr><td>"Declined" + $0 shown</td><td>Website/ledger out of sync</td><td>Check Polygonscan, hard-refresh</td></tr>
+          <tr><td>Can't withdraw any</td><td>Funds in open/unresolved bets</td><td>Sell or wait for resolution + redeem</td></tr>
+          <tr><td>"Withdrawal disabled" / KYC</td><td>Compliance hold</td><td>Complete ID verification in settings</td></tr>
           <tr><td>Deposit not credited</td><td>Wrong network/token/address</td><td>recovery.polymarket.com / matic-recovery</td></tr>
-          <tr><td>Key shows $0 balance</td><td>Exported EOA, funds are at proxy</td><td>Look up proxy address, not EOA</td></tr>
-          <tr><td>Account drained, no action by you</td><td>Magic Labs auth breach class</td><td>Export key → self-custody / use direct wallet</td></tr>
+          <tr><td>Key shows $0 balance</td><td>Exported key wallet; funds are in the vault</td><td>Look up the proxy/vault address, not the key one</td></tr>
+          <tr><td>Account drained, no action by you</td><td>Magic login breach class (Dec 2025)</td><td>Export key → self-custody / use a direct wallet</td></tr>
         </tbody>
       </table>
       </div>
